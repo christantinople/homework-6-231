@@ -319,8 +319,27 @@ best_params <- select_best(tune_res)
 
 rf_final_wf <- finalize_workflow(rf_wf, best_params)
 
-rf_final_fit_test <- fit(rf_final_wf, data = pokemon_test)
+rf_final_fit <- fit(rf_final_wf, data = pokemon_train)
 ```
+
+```{r}
+augment(rf_final_fit, new_data = pokemon_test) %>%
+  roc_auc(truth = type_1, estimate = .pred_Bug:.pred_Water)
+```
+```{r}
+# roc curves for the different factor levels
+augment(rf_final_fit, new_data = pokemon_test) %>%
+  roc_curve(truth = type_1, estimate = .pred_Bug:.pred_Water) %>%
+  autoplot()
+```
+
+```{r}
+# visualization of the accuracy
+augment(rf_final_fit, new_data = pokemon_test) %>%
+  conf_mat(truth = type_1, estimate = .pred_class) %>%
+  autoplot(type="heatmap")
+```
+
 ## For 231 Students
 
 ### Exercise 11
