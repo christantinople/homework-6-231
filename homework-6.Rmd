@@ -118,6 +118,11 @@ corr_mat <- model.matrix(~0+., data=pokemon_train%>%select(-c(x,name,generation,
 corr_mat%>%
   corrplot(method="number")
 ```
+I chose not to represent Pokedex number (`x`), `name`, `generation`, nor the Pokemons' types in the diagram. Pokedex number and Pokemon name clearly aren't relevant in the models we are using. Name would be important if we had some sort of Natural Language Processing element to this, but we don't. There's just too many types and it makes the diagram look bad, and generation is not too relevant either. 
+
+However, Legendary status is definitiely gonna correlate with the bulk of the predictors, being the stats.
+
+All of the stats are positively correlated with each other, but they are not strongly correlated. We can notice that `attack` and `sp_atk` are pretty strongly correlated with `total`. This is probably because `attack` or `sp_atk` will commonly be the highest base stat, meaning it will take up most of the base stat *total*.
 
 ### Exercise 3
 
@@ -154,6 +159,8 @@ tune_res <- tune_grid(
 autoplot(tune_res)
 ```
 
+A single decision tree seems to perform better with a smaller complexity penalty. Having a more complex tree may be advantageous since we only have one tree.
+
 ### Exercise 4
 
 What is the `roc_auc` of your best-performing pruned decision tree on the folds? *Hint: Use `collect_metrics()` and `arrange()`.*
@@ -164,6 +171,7 @@ class_tree_roc_auc <- collect_metrics(tune_res)%>%
 class_tree_roc_auc%>%
   head()
 ```
+
 We see the the best `roc_auc` metric is 0.6364470	corresponding to a `cost_complexity` of 0.004641589.	
 
 ### Exercise 5
@@ -198,10 +206,12 @@ rf_wf <- workflow() %>%
   add_recipe(pokemon_recipe)
 
 param_grid <- grid_regular(mtry(range = c(1,8)),
-                           trees(range = c(2,16)),
+                           trees(range = c(2,500)),
                            min_n(range = c(2,40)),
                            levels = 8)
 ```
+
+`mtry` is an integer which represents the number of predictors used. For example, if `mtry` = 4, then 4 predictors are randomly selected at each split of the tree model. The `trees` argument is the number of trees in the ensemble. The `min_n` is the minimium number of observations that have to trace down the tree and land on a certain node in order for that node to be able to split further. This would help prevent overfitting.
 
 ### Exercise 6
 
@@ -217,13 +227,15 @@ tune_res <- tune_grid(
   metrics = metric_set(roc_auc)
 )
 ```
+
 ```{r,include=FALSE}
-load("three_param_tune.rda")
+load("three_param_tune_res.rda")
 ```
 
 ```{r}
 autoplot(tune_res)
 ```
+The `trees` parameter seems to be the most important. Performance is basically identitical for most models with more nodes. The performance is slightly better for smaller values of `min_n`, and it seems like `mtry` doesn't affect the performance much at all.
 
 ### Exercise 7
 
@@ -235,7 +247,7 @@ rf_roc_auc <- collect_metrics(tune_res)%>%
 rf_roc_auc%>%
   head()
 ```
-We see the the best `roc_auc` metric is 0.7289828 corresponding to `mtry` = 4, `trees` = 14, and `min_n` = 40.
+We see the the best `roc_auc` metric is 0.7425208	 corresponding to `mtry` = 3, `trees` = 144, and `min_n` = 2.
 
 ### Exercise 8
 
@@ -254,6 +266,9 @@ rf_final_fit%>%
   pull_workflow_fit()%>%
   vip()
 ```
+All of the stats were quite comparitively useful. Based on my knowledge of pokemon, this order of the stats is roughly what I would expect. I expected `legendary` to be the least useful since there are so few legendary pokemon compared to non-legendary, and within the legendary pokemon, their types are going to spread out; I intuitively wouldn't think of legendary status as a good predictor for the primary type.
+
+`generation` seems like it could be slightly useful, as in the distributions of primary types of Pokemon are probably slightly different between generations of Pokemon, but this information would not be a very concrete predictor of primary type since all primary types are plentiful among all 6 generations used in our data set (why aren't we using an up-to-date list with the current 8 generations?)
 
 ### Exercise 9
 
@@ -313,7 +328,7 @@ best_roc_auc%>%arrange(desc(roc_auc))
 ```
 ```{r}
 # get the tune_res from the random forest
-load("three_param_tune.rda")
+load("three_param_tune_res.rda")
 
 best_params <- select_best(tune_res)
 
@@ -339,9 +354,95 @@ augment(rf_final_fit, new_data = pokemon_test) %>%
   conf_mat(truth = type_1, estimate = .pred_class) %>%
   autoplot(type="heatmap")
 ```
+My model was best at predicting Psychic type and worst at predicting Grass type.
 
 ## For 231 Students
 
 ### Exercise 11
 
 Using the `abalone.txt` data from previous assignments, fit and tune a random forest model to predict `age`. Use stratified cross-validation and select ranges for `mtry`, `min_n`, and `trees`. Present your results. What was the model's RMSE on your testing set?
+
+```{r}
+abalone <- read_csv(file = "data/abalone.csv")
+abalone <- abalone %>%
+  mutate(age = rings+1.5)
+```
+
+```{r}
+set.seed(42069) # for reproducibility
+
+# get stratified train/testing sets
+abalone_split <- initial_split(abalone, prop = 0.80,
+                                strata = age)
+abalone_train <- training(abalone_split)
+abalone_test <- testing(abalone_split)
+
+abalone_folds <- vfold_cv(abalone_train, v=5, strata=age)
+```
+
+```{r}
+# define recipe
+abalone_recipe <- recipe(age ~ ., data = abalone_train%>%select(-rings)) %>%
+  step_dummy(all_nominal_predictors())%>%
+  step_interact(terms = ~ starts_with("type"):shucked_weight + longest_shell:diameter + shucked_weight:shell_weight)%>%
+  step_center(all_predictors())%>%
+  step_scale(all_predictors())
+```
+
+```{r}
+# set up model and workflow
+rf_spec <- rand_forest(mtry = tune(), trees = tune(), min_n = tune()) %>%
+  set_engine("ranger", importance = "impurity") %>%
+  set_mode("regression")
+
+rf_wf <- workflow() %>%
+  add_model(rf_spec)%>%
+  add_recipe(abalone_recipe)
+
+# grid of parameter values to search over
+param_grid <- grid_regular(mtry(range = c(1,8)),
+                           trees(range = c(2,200)),
+                           min_n(range = c(2,40)),
+                           levels = 8)
+```
+
+```{r,eval=FALSE}
+# get results of tuning grid
+set.seed(42069)
+
+ab_tune_res <- tune_grid(
+  rf_wf, 
+  resamples = abalone_folds, 
+  grid = param_grid, 
+  metrics = metric_set(rmse)
+)
+```
+```{r,include=FALSE}
+load("ab_tune_res.rda")
+```
+
+```{r}
+# plot results
+autoplot(ab_tune_res)
+```
+
+```{r}
+# find the parameter values that yield the lowest rmse
+rf_rmse <- collect_metrics(ab_tune_res)%>%
+  arrange(mean)
+rf_rmse%>%
+  head()
+```
+We see that the model where `mtry` is 5, `trees` is 200, and `min_n` is 29 yields the lowest training rmse of 2.166103.
+
+```{r}
+best_params <- select_best(ab_tune_res)
+
+rf_final <- finalize_workflow(rf_wf, best_params)
+
+rf_final_fit <- fit(rf_final, data = abalone_train)
+
+augment(rf_final_fit, new_data = abalone_test) %>%
+  rmse(truth = age, estimate = .pred)
+```
+We see that the test rmse is 2.036142 which is actually lower than the training rmse.
